@@ -66,10 +66,18 @@ def convert_pdf_to_markdown(pdf_path: str) -> str:
         print(f"Erreur lors de la conversion de {pdf_path}: {str(e)}")
         raise
 
-def convert_new_pdfs(directory_path: str):
-    """Convertit uniquement les nouveaux fichiers PDF en markdown."""
+def convert_new_pdfs(directory_path: str, output_dir: str = "./db"):
+    """
+    Convertit uniquement les nouveaux fichiers PDF en markdown.
+    Stocke le graphe de connaissances dans le répertoire output_dir.
+    """
     if not os.path.exists(directory_path):
         raise FileNotFoundError(f"Le répertoire {directory_path} n'existe pas")
+    
+    # Créer le répertoire de sortie s'il n'existe pas
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"✓ Répertoire de sortie créé: {output_dir}")
     
     print(f"Recherche des nouveaux fichiers PDF dans {directory_path}...")
     pdf_files = [f for f in os.listdir(directory_path) if f.endswith('.pdf')]
@@ -90,6 +98,68 @@ def convert_new_pdfs(directory_path: str):
                 print(f"✗ Erreur lors du traitement de {filename}: {str(e)}")
         else:
             print(f"✓ Fichier markdown existant trouvé pour {filename}")
+    
+    # Après conversion, générer le graphe de connaissances
+    markdown_files = [os.path.join(directory_path, f) for f in os.listdir(directory_path) if f.endswith('.md')]
+    if markdown_files:
+        print("\nConstruction du graphe de connaissances...")
+        
+        # Configurer Gemini pour la génération du graphe
+        try:
+            api_key = load_config()
+            genai.configure(api_key=api_key)
+            
+            # Extraire le contenu des fichiers markdown
+            all_content = ""
+            for md_file in markdown_files:
+                try:
+                    with open(md_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        all_content += f"\n=== Contenu de {os.path.basename(md_file)} ===\n{content}\n"
+                except Exception as e:
+                    print(f"✗ Erreur lors de la lecture de {md_file}: {str(e)}")
+            
+            # Sauvegarder le graphe dans le répertoire de sortie
+            graph_path = os.path.join(output_dir, "knowledge_graph.graphml")
+            
+            # Si un graphe existe déjà, le lire et l'enrichir
+            if os.path.exists(graph_path):
+                existing_graph = nx.read_graphml(graph_path)
+                new_graph = build_knowledge_graph(markdown_files)
+                
+                # Fusionner les graphes
+                for node in new_graph.nodes():
+                    if node not in existing_graph:
+                        node_attrs = new_graph.nodes[node]
+                        existing_graph.add_node(node, **node_attrs)
+                
+                for u, v, data in new_graph.edges(data=True):
+                    if not existing_graph.has_edge(u, v):
+                        existing_graph.add_edge(u, v, **data)
+                
+                # Sauvegarder le graphe fusionné
+                nx.write_graphml(existing_graph, graph_path)
+                print(f"✓ Graphe de connaissances enrichi et sauvegardé dans {graph_path}")
+                
+                # Statistiques
+                print(f"\nStatistiques du graphe:")
+                print(f"- Nombre de nœuds: {existing_graph.number_of_nodes()}")
+                print(f"- Nombre de relations: {existing_graph.number_of_edges()}")
+            else:
+                # Créer un nouveau graphe
+                new_graph = build_knowledge_graph(markdown_files)
+                nx.write_graphml(new_graph, graph_path)
+                print(f"✓ Nouveau graphe de connaissances sauvegardé dans {graph_path}")
+                
+                # Statistiques
+                print(f"\nStatistiques du graphe:")
+                print(f"- Nombre de nœuds: {new_graph.number_of_nodes()}")
+                print(f"- Nombre de relations: {new_graph.number_of_edges()}")
+                
+        except Exception as e:
+            print(f"✗ Erreur lors de la génération du graphe: {str(e)}")
+    else:
+        print("Aucun fichier markdown trouvé, impossible de générer le graphe.")
 
 def load_knowledge_graph(graph_path: str) -> nx.DiGraph:
     """Charge le graphe de connaissances depuis le fichier GraphML."""
@@ -184,21 +254,27 @@ Formatte ta réponse comme un texte continu et naturel, sans utiliser de puces o
 
 def main():
     parser = argparse.ArgumentParser(description='Système RAG utilisant Gemini et un graphe de connaissances')
-    parser.add_argument('--graph', help='Chemin vers le fichier GraphML du graphe de connaissances')
+    parser.add_argument('--graph', help='Chemin vers le fichier GraphML du graphe de connaissances ou le répertoire contenant les fichiers')
     parser.add_argument('--api-key', help='Clé API Gemini (optionnel si configurée dans config.ini)')
     parser.add_argument('--query', help='Question à poser')
     parser.add_argument('--list-models', action='store_true', help='Liste les modèles disponibles')
     parser.add_argument('--md', action='store_true', help='Utiliser la concaténation des fichiers markdown au lieu du graphe')
     parser.add_argument('--config', default='config.ini', help='Chemin vers le fichier de configuration')
     parser.add_argument('--convert-only', action='store_true', help='Convertir uniquement les nouveaux fichiers PDF en markdown')
+    parser.add_argument('--db-dir', default='./db', help='Répertoire pour stocker/lire les fichiers de la base de connaissances')
     
     args = parser.parse_args()
     
     try:
+        # Créer le répertoire db s'il n'existe pas
+        if not os.path.exists(args.db_dir):
+            os.makedirs(args.db_dir)
+            print(f"✓ Répertoire de base de connaissances créé: {args.db_dir}")
+            
         if args.convert_only:
             if not args.graph:
                 parser.error("L'argument --graph est requis pour spécifier le répertoire contenant les fichiers PDF")
-            convert_new_pdfs(args.graph)
+            convert_new_pdfs(args.graph, args.db_dir)
             return
             
         # Charger la clé API depuis le fichier de configuration
@@ -216,10 +292,15 @@ def main():
                 parser.error("L'argument --graph est requis pour spécifier le répertoire contenant les fichiers markdown")
             context = get_context_from_markdown(args.graph)
         else:
-            if not args.graph:
-                parser.error("L'argument --graph est requis pour spécifier le fichier GraphML")
+            # Chemin par défaut vers le graphe de connaissances
+            graph_path = args.graph if args.graph else os.path.join(args.db_dir, "knowledge_graph.graphml")
+            
+            if not os.path.exists(graph_path):
+                print(f"Le fichier {graph_path} n'existe pas. Utilisez --graph pour spécifier un autre fichier ou générez-le d'abord.")
+                return
+                
             # Charger le graphe de connaissances
-            graph = load_knowledge_graph(args.graph)
+            graph = load_knowledge_graph(graph_path)
             
             # Extraire les nœuds pertinents
             relevant_nodes = extract_relevant_nodes(graph, args.query)

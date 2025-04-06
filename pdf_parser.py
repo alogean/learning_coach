@@ -68,12 +68,18 @@ def convert_pdf_to_markdown(pdf_path):
     result = converter.convert(pdf_path)
     return result.document.export_to_markdown()
 
-def process_directory(directory_path):
+def process_directory(directory_path, output_dir="./db"):
     """
     Traite tous les fichiers PDF dans le répertoire spécifié et construit un graphe de connaissances.
     Utilise les fichiers markdown existants si disponibles.
+    Stocke le graphe dans le répertoire output_dir.
     """
     markdown_files = []
+    
+    # Créer le répertoire de sortie s'il n'existe pas
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"✓ Répertoire de sortie créé: {output_dir}")
     
     for filename in os.listdir(directory_path):
         if filename.endswith('.pdf'):
@@ -100,8 +106,8 @@ def process_directory(directory_path):
         print("\nConstruction du graphe de connaissances...")
         knowledge_graph = build_knowledge_graph(markdown_files)
         
-        # Sauvegarder le graphe
-        graph_path = os.path.join(directory_path, "knowledge_graph.graphml")
+        # Sauvegarder le graphe dans le répertoire de sortie
+        graph_path = os.path.join(output_dir, "knowledge_graph.graphml")
         nx.write_graphml(knowledge_graph, graph_path)
         print(f"✓ Graphe de connaissances sauvegardé dans {graph_path}")
         
